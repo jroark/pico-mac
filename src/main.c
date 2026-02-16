@@ -44,6 +44,7 @@
 #include "tusb.h"
 
 #include "umac.h"
+#include "rom.h"
 
 #if USE_SD
 #include "f_util.h"
@@ -248,6 +249,11 @@ static void     core1_main()
         disc_descr_t discs[DISC_NUM_DRIVES] = {0};
 
         printf("Core 1 started\n");
+        printf("ROM bytes: %u, DISC bytes: %u\n", (unsigned int)sizeof(umac_rom), (unsigned int)sizeof(umac_disc));
+        if (sizeof(umac_rom) < ROM_SIZE) {
+                printf("*** WARNING: ROM image smaller than expected (%u < %u)\n",
+                       (unsigned int)sizeof(umac_rom), (unsigned int)ROM_SIZE);
+        }
         disc_setup(discs);
 
         umac_init(umac_ram, (void *)umac_rom, discs);
@@ -260,6 +266,7 @@ static void     core1_main()
 
         while (true) {
                 poll_umac();
+                video_task();
         }
 }
 
@@ -284,4 +291,3 @@ int     main()
 
 	return 0;
 }
-

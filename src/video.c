@@ -343,3 +343,8 @@ void    video_init(uint32_t *framebuffer)
         video_dma_prep_new();
         dma_channel_start(video_dmach_descr_cfg);
 }
+
+void    video_task(void)
+{
+        /* VGA path is fully DMA/PIO-driven after video_init(). */
+}

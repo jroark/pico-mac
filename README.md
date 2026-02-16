@@ -116,6 +116,7 @@ higher resolution, to change pin configs, etc.:
         `-DLCD_SPI=<0|1> -DLCD_MHZ=<MHz>`
         `-DLCD_PIN_SCK=<gpio> -DLCD_PIN_MOSI=<gpio> -DLCD_PIN_MISO=<gpio>`
         `-DLCD_PIN_CS=<gpio> -DLCD_PIN_DC=<gpio> -DLCD_PIN_RST=<gpio> -DLCD_PIN_BL=<gpio>`
+        `-DLCD_FILTER_MODE=<0|1> -DLCD_PRESERVE_ASPECT=<0|1>`
       - Touch defaults can be overridden:
         `-DUSE_TOUCH=<0|1>`
         `-DTOUCH_MHZ=<MHz> -DTOUCH_PIN_CS=<gpio> -DTOUCH_PIN_IRQ=<gpio> -DTOUCH_USE_IRQ=<0|1>`

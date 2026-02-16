@@ -501,7 +501,8 @@ void video_init(uint32_t *framebuffer)
         printf("Video init (Waveshare LCD)\n");
         video_framebuffer = framebuffer;
         video_framebuffer_bytes = (uint8_t *)framebuffer;
-        /* Preserve source aspect ratio instead of stretching. */
+#if LCD_PRESERVE_ASPECT
+        /* Preserve source aspect ratio (letterbox/pillarbox). */
         view_w = LCD_WIDTH;
         view_h = (LCD_WIDTH * DISP_HEIGHT) / DISP_WIDTH;
         if (view_h > LCD_HEIGHT) {
@@ -510,6 +511,13 @@ void video_init(uint32_t *framebuffer)
         }
         view_x0 = (LCD_WIDTH - view_w) / 2;
         view_y0 = (LCD_HEIGHT - view_h) / 2;
+#else
+        /* Fill the full panel area (stretches source aspect ratio). */
+        view_x0 = 0;
+        view_y0 = 0;
+        view_w = LCD_WIDTH;
+        view_h = LCD_HEIGHT;
+#endif
         for (int x = 0; x < LCD_WIDTH; x++) {
                 if (x < view_x0 || x >= (view_x0 + view_w)) {
                         x_src0[x] = 0;

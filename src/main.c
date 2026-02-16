@@ -179,7 +179,7 @@ static FIL discfp;
 static void     disc_setup(disc_descr_t discs[DISC_NUM_DRIVES])
 {
 #if USE_SD
-        char *disc0_name;
+        const char *disc0_name = NULL;
         const char *disc0_ro_name = "umac0ro.img";
         const char *disc0_pattern = "umac0*.img";
 
@@ -187,6 +187,10 @@ static void     disc_setup(disc_descr_t discs[DISC_NUM_DRIVES])
         printf("Starting SPI/FatFS:\n");
         set_spi_dma_irq_channel(true, false);
         sd_card_t *pSD = sd_get_by_num(0);
+        if (!pSD) {
+                printf("  no SD device config found\n");
+                goto no_sd;
+        }
         FRESULT fr = f_mount(&pSD->fatfs, pSD->pcName, 1);
         printf("  mount: %d\n", fr);
         if (fr != FR_OK) {
@@ -198,7 +202,7 @@ static void     disc_setup(disc_descr_t discs[DISC_NUM_DRIVES])
         DIR di = {0};
         FILINFO fi = {0};
         fr = f_findfirst(&di, &fi, "/", disc0_pattern);
-        if (fr != FR_OK) {
+        if (fr != FR_OK || fi.fname[0] == '\0') {
                 printf("  Can't find images %s: %s (%d)\n", disc0_pattern, FRESULT_str(fr), fr);
                 goto no_sd;
         }
@@ -209,7 +213,8 @@ static void     disc_setup(disc_descr_t discs[DISC_NUM_DRIVES])
         printf("  Opening %s (R%c)\n", disc0_name, read_only ? 'O' : 'W');
 
         /* Open image, set up disc info: */
-        fr = f_open(&discfp, disc0_name, FA_OPEN_EXISTING | FA_READ | FA_WRITE);
+        BYTE open_mode = FA_OPEN_EXISTING | FA_READ | (read_only ? 0 : FA_WRITE);
+        fr = f_open(&discfp, disc0_name, open_mode);
         if (fr != FR_OK && fr != FR_EXIST) {
                 printf("  *** Can't open %s: %s (%d)!\n", disc0_name, FRESULT_str(fr), fr);
                 goto no_sd;

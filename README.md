@@ -107,12 +107,37 @@ higher resolution, to change pin configs, etc.:
      option makes a _Mac 128K_ configuration virtually unusable.
      It is recommended only to use this when configuring >208K
      using the option above.
+   * `-DUSE_WAVESHARE_LCD=1`: Use the Waveshare Pico-ResTouch-LCD-2.8
+     SPI panel instead of VGA output.  This enables a software scaler
+     from the Mac framebuffer to 320x240 RGB565 and sets default LCD pin
+     mappings for that board.  In this mode, the touchscreen can emulate
+     the Mac mouse.
+      - Defaults can be overridden:
+        `-DLCD_SPI=<0|1> -DLCD_MHZ=<MHz>`
+        `-DLCD_PIN_SCK=<gpio> -DLCD_PIN_MOSI=<gpio> -DLCD_PIN_MISO=<gpio>`
+        `-DLCD_PIN_CS=<gpio> -DLCD_PIN_DC=<gpio> -DLCD_PIN_RST=<gpio> -DLCD_PIN_BL=<gpio>`
+      - Touch defaults can be overridden:
+        `-DUSE_TOUCH=<0|1>`
+        `-DTOUCH_MHZ=<MHz> -DTOUCH_PIN_CS=<gpio> -DTOUCH_PIN_IRQ=<gpio> -DTOUCH_USE_IRQ=<0|1>`
+        `-DTOUCH_RAW_MIN_X=<n> -DTOUCH_RAW_MAX_X=<n> -DTOUCH_RAW_MIN_Y=<n> -DTOUCH_RAW_MAX_Y=<n>`
+        `-DTOUCH_SWAP_XY=<0|1> -DTOUCH_INVERT_X=<0|1> -DTOUCH_INVERT_Y=<0|1>`
    * `-DVIDEO_PIN=<GPIO pin>`: Move the video output pins; defaults
      to the pinout shown below.
 
 Tip: `cmake` caches these variables, so if you see weird behaviour
 having built previously and then changed an option, delete the `build`
 directory and start again.
+
+### Waveshare Pico-ResTouch-LCD-2.8 build example
+
+```
+mkdir build
+(cd build ; PICO_SDK_PATH=/path/to/sdk cmake .. \
+  -DUSE_WAVESHARE_LCD=1 \
+  -DUSE_SD=1 \
+  -DSD_SPI=1 \
+  -DSD_SCK=10 -DSD_TX=11 -DSD_RX=12 -DSD_CS=22)
+```
 
 ## ROM image
 
@@ -368,4 +393,3 @@ The remainder of the code is released under the MIT licence:
  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  SOFTWARE.
-

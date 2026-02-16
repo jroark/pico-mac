@@ -1,0 +1,20 @@
+# Root build outputs
+/build/
+/build-nosd/
+/cmake-build-*/
+
+# Local ROM/disc/RAM blobs used for firmware generation
+/rom.bin
+/disc.bin
+/ram.bin
+
+# Generated incbin headers
+/incbin/umac-rom.h
+/incbin/umac-disc.h
+
+# Top-level copied ROM test files
+/*.ROM
+
+# Submodule local build products (external/umac)
+/external/umac/main
+/external/umac/src/*.o

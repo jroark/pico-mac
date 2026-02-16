@@ -35,12 +35,20 @@ socket, which SPI it is driven by, and how it is wired.
 //
 #include "diskio.h" /* Declarations of disk functions */
 
+#if (SD_SPI == 0)
+#define SD_SPI_INST spi0
+#elif (SD_SPI == 1)
+#define SD_SPI_INST spi1
+#else
+#error "SD_SPI must be 0 or 1"
+#endif
+
 // Hardware Configuration of SPI "objects"
 // Note: multiple SD cards can be driven by one SPI if they use different slave
 // selects.
 static spi_t spis[] = {  // One for each SPI.
     {
-        .hw_inst = spi0,  // SPI component
+        .hw_inst = SD_SPI_INST,  // SPI component
         .miso_gpio = SD_RX, // GPIO number (not pin number)
         .mosi_gpio = SD_TX,
         .sck_gpio = SD_SCK,

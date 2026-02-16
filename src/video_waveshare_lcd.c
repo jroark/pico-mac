@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <inttypes.h>
 #include <stdbool.h>
+#include <stdlib.h>
 
 #include "pico/stdlib.h"
 #include "hardware/gpio.h"
@@ -48,6 +49,9 @@ static int view_h;
 static uint32_t lcd_spi_hz = LCD_MHZ * 1000 * 1000;
 #if USE_TOUCH
 static uint32_t touch_spi_hz = TOUCH_MHZ * 1000 * 1000;
+static int touch_last_lx;
+static int touch_last_ly;
+static bool touch_last_valid;
 #endif
 
 /* Line buffer in big-endian RGB565 bytes. */
@@ -174,8 +178,8 @@ static void lcd_init_panel(void)
         }
 
         {
-                /* Landscape, RGB */
-                const uint8_t madctl = 0x28;
+                /* Landscape, RGB, mirrored-X corrected for Waveshare Pico-ResTouch-LCD-2.8 */
+                const uint8_t madctl = 0x68;
                 lcd_write_cmd(0x36);
                 lcd_write_data(&madctl, 1);
         }
@@ -216,50 +220,59 @@ static uint16_t touch_read_axis(uint8_t cmd)
         return (uint16_t)(((rx[1] << 8) | rx[2]) >> 3);
 }
 
+static void sort_u16(uint16_t *v, int n)
+{
+        for (int i = 0; i < n - 1; i++) {
+                for (int j = i + 1; j < n; j++) {
+                        if (v[j] < v[i]) {
+                                uint16_t t = v[i];
+                                v[i] = v[j];
+                                v[j] = t;
+                        }
+                }
+        }
+}
+
 static bool touch_read_raw(int *raw_x, int *raw_y)
 {
+        enum {
+                TOUCH_SAMPLES = 5,
+                TOUCH_RAW_SPREAD_MAX = 250,
+                TOUCH_Z_MIN = 20,
+                TOUCH_Z_MAX = 4090
+        };
         spi_set_baudrate(lcd_spi, touch_spi_hz);
         bool irq_pressed = touch_is_pressed();
-        if (TOUCH_USE_IRQ && !irq_pressed) {
-                spi_set_baudrate(lcd_spi, lcd_spi_hz);
-                return false;
-        }
 
-        /* Median-of-3 sample reject helps tame noisy raw readings. */
-        uint16_t xs[3];
-        uint16_t ys[3];
-        for (int i = 0; i < 3; i++) {
+        /* Median-of-5 with spread check tamps down sporadic axis flips. */
+        uint16_t xs[TOUCH_SAMPLES];
+        uint16_t ys[TOUCH_SAMPLES];
+        for (int i = 0; i < TOUCH_SAMPLES; i++) {
                 xs[i] = touch_read_axis(0xD0); /* X position */
                 ys[i] = touch_read_axis(0x90); /* Y position */
         }
         uint16_t z1 = touch_read_axis(0xB0);
         uint16_t z2 = touch_read_axis(0xC0);
-        for (int i = 0; i < 2; i++) {
-                for (int j = i + 1; j < 3; j++) {
-                        if (xs[j] < xs[i]) {
-                                uint16_t t = xs[i];
-                                xs[i] = xs[j];
-                                xs[j] = t;
-                        }
-                        if (ys[j] < ys[i]) {
-                                uint16_t t = ys[i];
-                                ys[i] = ys[j];
-                                ys[j] = t;
-                        }
-                }
-        }
-        *raw_x = xs[1];
-        *raw_y = ys[1];
+        sort_u16(xs, TOUCH_SAMPLES);
+        sort_u16(ys, TOUCH_SAMPLES);
+        *raw_x = xs[TOUCH_SAMPLES / 2];
+        *raw_y = ys[TOUCH_SAMPLES / 2];
 
-        bool z_valid = (z1 > 20 && z1 < 4090 && z2 > 20 && z2 < 4090);
-        bool xy_valid = (*raw_x > 20 && *raw_x < 4090 && *raw_y > 20 && *raw_y < 4090);
+        bool z_valid = (z1 > TOUCH_Z_MIN && z1 < TOUCH_Z_MAX &&
+                        z2 > TOUCH_Z_MIN && z2 < TOUCH_Z_MAX);
+        bool xy_valid = (*raw_x > TOUCH_Z_MIN && *raw_x < TOUCH_Z_MAX &&
+                         *raw_y > TOUCH_Z_MIN && *raw_y < TOUCH_Z_MAX);
+        bool spread_ok = ((xs[TOUCH_SAMPLES - 1] - xs[0]) <= TOUCH_RAW_SPREAD_MAX) &&
+                         ((ys[TOUCH_SAMPLES - 1] - ys[0]) <= TOUCH_RAW_SPREAD_MAX);
         bool pressed;
 #if TOUCH_USE_IRQ
-        /* IRQ-gated mode: IRQ must assert, with plausible sampled data. */
-        pressed = irq_pressed && (z_valid || xy_valid);
+        /* Prefer IRQ, but allow pressure-based fallback for boards with unreliable IRQ wiring. */
+        bool pressure_pressed = (z2 > (z1 + 30));
+        pressed = z_valid && xy_valid && spread_ok &&
+                  (irq_pressed || pressure_pressed);
 #else
-        /* No-IRQ mode: rely on pressure validity to avoid false corner-locks. */
-        pressed = z_valid;
+        /* No-IRQ mode: require pressure validity plus stable coordinates. */
+        pressed = z_valid && xy_valid && spread_ok;
 #endif
         spi_set_baudrate(lcd_spi, lcd_spi_hz);
         return pressed;
@@ -285,6 +298,25 @@ static int clampi(int v, int lo, int hi)
         return v;
 }
 
+static void touch_raw_to_lcd(int raw_x, int raw_y, int *lx, int *ly)
+{
+        int tx = raw_x;
+        int ty = raw_y;
+#if TOUCH_SWAP_XY
+        int t = tx;
+        tx = ty;
+        ty = t;
+#endif
+        *lx = map_axis(tx, TOUCH_RAW_MIN_X, TOUCH_RAW_MAX_X, LCD_WIDTH - 1);
+        *ly = map_axis(ty, TOUCH_RAW_MIN_Y, TOUCH_RAW_MAX_Y, LCD_HEIGHT - 1);
+#if TOUCH_INVERT_X
+        *lx = (LCD_WIDTH - 1) - *lx;
+#endif
+#if TOUCH_INVERT_Y
+        *ly = (LCD_HEIGHT - 1) - *ly;
+#endif
+}
+
 static void touch_update_mouse(void)
 {
 #if USE_SD
@@ -301,22 +333,43 @@ static void touch_update_mouse(void)
         int raw_x = 0;
         int raw_y = 0;
         if (touch_read_raw(&raw_x, &raw_y)) {
-                int tx = raw_x;
-                int ty = raw_y;
-#if TOUCH_SWAP_XY
-                int t = tx;
-                tx = ty;
-                ty = t;
+                enum { TOUCH_MAX_STEP_PX = 70 };
+                int lx = 0;
+                int ly = 0;
+                touch_raw_to_lcd(raw_x, raw_y, &lx, &ly);
+
+                if (touch_last_valid &&
+                    (abs(lx - touch_last_lx) > TOUCH_MAX_STEP_PX ||
+                     abs(ly - touch_last_ly) > TOUCH_MAX_STEP_PX)) {
+                        /* Confirm suspicious jumps (often bad samples) before applying. */
+                        int raw_x2 = 0;
+                        int raw_y2 = 0;
+                        int lx2 = lx;
+                        int ly2 = ly;
+                        if (!touch_read_raw(&raw_x2, &raw_y2)) {
+                                cursor_button = 0;
+                                touch_last_valid = false;
+#if USE_SD
+                                if (sd_spi) {
+                                        spi_unlock(sd_spi);
+                                }
 #endif
-                /* First map raw touch to full LCD coordinates. */
-                int lx = map_axis(tx, TOUCH_RAW_MIN_X, TOUCH_RAW_MAX_X, LCD_WIDTH - 1);
-                int ly = map_axis(ty, TOUCH_RAW_MIN_Y, TOUCH_RAW_MAX_Y, LCD_HEIGHT - 1);
-#if TOUCH_INVERT_X
-                lx = (LCD_WIDTH - 1) - lx;
-#endif
-#if TOUCH_INVERT_Y
-                ly = (LCD_HEIGHT - 1) - ly;
-#endif
+                                return;
+                        }
+                        touch_raw_to_lcd(raw_x2, raw_y2, &lx2, &ly2);
+                        if (abs(lx2 - touch_last_lx) > TOUCH_MAX_STEP_PX ||
+                            abs(ly2 - touch_last_ly) > TOUCH_MAX_STEP_PX) {
+                                lx = touch_last_lx;
+                                ly = touch_last_ly;
+                        } else {
+                                lx = lx2;
+                                ly = ly2;
+                        }
+                }
+                touch_last_lx = lx;
+                touch_last_ly = ly;
+                touch_last_valid = true;
+
                 /* Then map from displayed viewport (letterboxed region) to Mac space. */
                 int vx = clampi(lx - view_x0, 0, view_w - 1);
                 int vy = clampi(ly - view_y0, 0, view_h - 1);
@@ -327,6 +380,7 @@ static void touch_update_mouse(void)
                 cursor_button = 1;
         } else {
                 cursor_button = 0;
+                touch_last_valid = false;
         }
 
 #if USE_SD

@@ -139,6 +139,54 @@ mkdir build
   -DSD_SCK=10 -DSD_TX=11 -DSD_RX=12 -DSD_CS=22)
 ```
 
+### Waveshare touchscreen notes
+
+The Pico-ResTouch-LCD-2.8 uses an XPT2046-compatible resistive touch
+controller on the same SPI bus as the LCD (and often SD).  This build
+maps touch input directly to Mac mouse motion.
+
+Defaults in this tree are set for the common Waveshare 2.8 setup:
+
+   * `TOUCH_USE_IRQ=1` (recommended for stable press/release detection)
+   * `TOUCH_SWAP_XY=1`
+   * `TOUCH_INVERT_X=1`
+   * `TOUCH_INVERT_Y=0`
+   * `TOUCH_RAW_MIN_X/Y=200`, `TOUCH_RAW_MAX_X/Y=3900`
+
+If your cursor direction is wrong, adjust orientation first:
+
+   * Left/right reversed: toggle `TOUCH_INVERT_X`
+   * Up/down reversed: toggle `TOUCH_INVERT_Y`
+   * Diagonal/skewed response: toggle `TOUCH_SWAP_XY`
+
+Then calibrate range values:
+
+1. Touch near the left and right bezel edges, note where cursor reaches.
+2. Increase/decrease `TOUCH_RAW_MIN_X` and `TOUCH_RAW_MAX_X` until full X
+   travel is covered without clipping.
+3. Repeat for top/bottom using `TOUCH_RAW_MIN_Y` and `TOUCH_RAW_MAX_Y`.
+
+Practical tips:
+
+   * If touch feels delayed, reduce `LCD_MHZ` only if your wiring is marginal,
+     otherwise keep LCD SPI fast and use IRQ touch mode.
+   * If touch occasionally "jumps" or mirrors for one sample, keep IRQ enabled
+     and ensure the touch IRQ pin is actually connected to the configured GPIO.
+   * If SD and LCD share SPI, access is serialized in firmware; heavy SD traffic
+     can still make pointer updates feel less responsive.
+
+Example with explicit touch overrides:
+
+```
+(cd build ; PICO_SDK_PATH=/path/to/sdk cmake .. \
+  -DUSE_WAVESHARE_LCD=1 \
+  -DUSE_SD=1 -DSD_SPI=1 -DSD_SCK=10 -DSD_TX=11 -DSD_RX=12 -DSD_CS=22 \
+  -DUSE_TOUCH=1 -DTOUCH_USE_IRQ=1 \
+  -DTOUCH_SWAP_XY=1 -DTOUCH_INVERT_X=1 -DTOUCH_INVERT_Y=0 \
+  -DTOUCH_RAW_MIN_X=200 -DTOUCH_RAW_MAX_X=3900 \
+  -DTOUCH_RAW_MIN_Y=200 -DTOUCH_RAW_MAX_Y=3900)
+```
+
 ## ROM image
 
 The flow is to use `umac` built on your workstation (e.g. Linux,

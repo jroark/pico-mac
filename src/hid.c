@@ -28,6 +28,7 @@
 #include "tusb.h"
 
 #include "kbd.h"
+#include "log.h"
 
 //--------------------------------------------------------------------+
 // MACRO TYPEDEF CONSTANT ENUM DECLARATION
@@ -68,34 +69,34 @@ void hid_app_task(void)
 // therefore report_desc = NULL, desc_len = 0
 void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* desc_report, uint16_t desc_len)
 {
-        printf("HID device address = %d, instance = %d is mounted\r\n", dev_addr, instance);
+        log_printf("HID device address = %d, instance = %d is mounted\r\n", dev_addr, instance);
 
         // Interface protocol (hid_interface_protocol_enum_t)
         const char* protocol_str[] = { "None", "Keyboard", "Mouse" };
         uint8_t const itf_protocol = tuh_hid_interface_protocol(dev_addr, instance);
 
-        printf("HID Interface Protocol = %s\r\n", protocol_str[itf_protocol]);
+        log_printf("HID Interface Protocol = %s\r\n", protocol_str[itf_protocol]);
 
         // By default host stack will use activate boot protocol on supported interface.
         // Therefore for this simple example, we only need to parse generic report descriptor (with built-in parser)
         if ( itf_protocol == HID_ITF_PROTOCOL_NONE )
         {
                 hid_info[instance].report_count = tuh_hid_parse_report_descriptor(hid_info[instance].report_info, MAX_REPORT, desc_report, desc_len);
-                printf("HID has %u reports \r\n", hid_info[instance].report_count);
+                log_printf("HID has %u reports \r\n", hid_info[instance].report_count);
         }
 
         // request to receive report
         // tuh_hid_report_received_cb() will be invoked when report is available
         if ( !tuh_hid_receive_report(dev_addr, instance) )
         {
-                printf("Error: cannot request to receive report\r\n");
+                log_printf("Error: cannot request to receive report\r\n");
         }
 }
 
 // Invoked when device with hid interface is un-mounted
 void tuh_hid_umount_cb(uint8_t dev_addr, uint8_t instance)
 {
-        printf("HID device address = %d, instance = %d is unmounted\r\n", dev_addr, instance);
+        log_printf("HID device address = %d, instance = %d is unmounted\r\n", dev_addr, instance);
 }
 
 // Invoked when received report from device via interrupt endpoint
@@ -124,7 +125,7 @@ void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t cons
         // continue to request to receive report
         if ( !tuh_hid_receive_report(dev_addr, instance) )
         {
-                printf("Error: cannot request to receive report\r\n");
+                log_printf("Error: cannot request to receive report\r\n");
         }
 }
 
@@ -152,12 +153,12 @@ static void process_kbd_report(hid_keyboard_report_t const *report)
                         if (find_key_in_report(&prev_report, report->keycode[i])) {
                                 /* Key held */
                         } else {
-                                /* printf("Key pressed: %02x\n", report->keycode[i]); */
+                                /* log_printf("Key pressed: %02x\n", report->keycode[i]); */
                                 kbd_queue_push(report->keycode[i], true);
                         }
                 }
                 if (prev_report.keycode[i] && !find_key_in_report(report, prev_report.keycode[i])) {
-                        /* printf("Key released: %02x\n", prev_report.keycode[i]); */
+                        /* log_printf("Key released: %02x\n", prev_report.keycode[i]); */
                         kbd_queue_push(prev_report.keycode[i], false);
                 }
         }
@@ -166,7 +167,7 @@ static void process_kbd_report(hid_keyboard_report_t const *report)
                 uint8_t mp = mod_change & report->modifier;
                 uint8_t mr = mod_change & prev_report.modifier;
                 if (mp) {
-                        /* printf("Modifiers pressed %02x\n", mp); */
+                        /* log_printf("Modifiers pressed %02x\n", mp); */
                         mp = (mp | (mp >> 4)) & 0xf; /* Don't care if left or right :P */
                         if (mp & 1)
                                 kbd_queue_push(HID_KEY_CONTROL_LEFT, true);
@@ -178,7 +179,7 @@ static void process_kbd_report(hid_keyboard_report_t const *report)
                                 kbd_queue_push(HID_KEY_GUI_LEFT, true);
                 }
                 if (mr) {
-                        /* printf("Modifiers released %02x\n", mr); */
+                        /* log_printf("Modifiers released %02x\n", mr); */
                         mr = (mr | (mr >> 4)) & 0xf;
                         if (mr & 1)
                                 kbd_queue_push(HID_KEY_CONTROL_LEFT, false);
@@ -257,7 +258,7 @@ static void process_generic_report(uint8_t dev_addr, uint8_t instance, uint8_t c
 
         if (!rpt_info)
         {
-                printf("Couldn't find the report info for this report !\r\n");
+                log_printf("Couldn't find the report info for this report !\r\n");
                 return;
         }
 

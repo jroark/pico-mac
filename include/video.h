@@ -27,8 +27,18 @@
 #define VIDEO_H
 
 #include <inttypes.h>
+#include <stdbool.h>
+
+typedef struct {
+        int raw_min_x;
+        int raw_max_x;
+        int raw_min_y;
+        int raw_max_y;
+} touch_calibration_t;
 
 void    video_init(uint32_t *framebuffer);
 void    video_task(void);
+void    video_touch_set_calibration(const touch_calibration_t *cal);
+bool    video_touch_calibrate(touch_calibration_t *out);
 
 #endif

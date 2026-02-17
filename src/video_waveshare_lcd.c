@@ -15,6 +15,7 @@
 #include "hardware/gpio.h"
 #include "hardware/spi.h"
 #include "video.h"
+#include "log.h"
 
 #if USE_SD
 #include "hw_config.h"
@@ -27,6 +28,18 @@ extern int cursor_button;
 
 #if !defined(LCD_SPI) || !defined(LCD_WIDTH) || !defined(LCD_HEIGHT)
 #error "LCD_* compile-time settings are required for video_waveshare_lcd.c"
+#endif
+#if !defined(TOUCH_OFFSET_X)
+#define TOUCH_OFFSET_X 0
+#endif
+#if !defined(TOUCH_OFFSET_Y)
+#define TOUCH_OFFSET_Y 0
+#endif
+#if !defined(TOUCH_EDGE_SNAP_X)
+#define TOUCH_EDGE_SNAP_X 0
+#endif
+#if !defined(TOUCH_EDGE_SNAP_Y)
+#define TOUCH_EDGE_SNAP_Y 0
 #endif
 
 #if (LCD_SPI == 0)
@@ -52,6 +65,10 @@ static uint32_t touch_spi_hz = TOUCH_MHZ * 1000 * 1000;
 static int touch_last_lx;
 static int touch_last_ly;
 static bool touch_last_valid;
+static int touch_raw_min_x = TOUCH_RAW_MIN_X;
+static int touch_raw_max_x = TOUCH_RAW_MAX_X;
+static int touch_raw_min_y = TOUCH_RAW_MIN_Y;
+static int touch_raw_max_y = TOUCH_RAW_MAX_Y;
 #endif
 
 /* Line buffer in big-endian RGB565 bytes. */
@@ -298,23 +315,213 @@ static int clampi(int v, int lo, int hi)
         return v;
 }
 
+static void touch_raw_normalize_axes(int raw_x, int raw_y, int *tx, int *ty)
+{
+        int nx = raw_x;
+        int ny = raw_y;
+#if TOUCH_SWAP_XY
+        int t = nx;
+        nx = ny;
+        ny = t;
+#endif
+        *tx = nx;
+        *ty = ny;
+}
+
 static void touch_raw_to_lcd(int raw_x, int raw_y, int *lx, int *ly)
 {
-        int tx = raw_x;
-        int ty = raw_y;
-#if TOUCH_SWAP_XY
-        int t = tx;
-        tx = ty;
-        ty = t;
-#endif
-        *lx = map_axis(tx, TOUCH_RAW_MIN_X, TOUCH_RAW_MAX_X, LCD_WIDTH - 1);
-        *ly = map_axis(ty, TOUCH_RAW_MIN_Y, TOUCH_RAW_MAX_Y, LCD_HEIGHT - 1);
+        int tx = 0;
+        int ty = 0;
+        touch_raw_normalize_axes(raw_x, raw_y, &tx, &ty);
+        *lx = map_axis(tx, touch_raw_min_x, touch_raw_max_x, LCD_WIDTH - 1);
+        *ly = map_axis(ty, touch_raw_min_y, touch_raw_max_y, LCD_HEIGHT - 1);
 #if TOUCH_INVERT_X
         *lx = (LCD_WIDTH - 1) - *lx;
 #endif
 #if TOUCH_INVERT_Y
         *ly = (LCD_HEIGHT - 1) - *ly;
 #endif
+        /* In true 1:1 mode (320x240 emulation to 320x240 LCD), avoid legacy
+         * offset tuning so stylus maps directly to cursor.
+         */
+        bool one_to_one = (view_x0 == 0 && view_y0 == 0 &&
+                           view_w == DISP_WIDTH && view_h == DISP_HEIGHT &&
+                           DISP_WIDTH == LCD_WIDTH && DISP_HEIGHT == LCD_HEIGHT);
+        if (!one_to_one) {
+                *lx = clampi(*lx + TOUCH_OFFSET_X, 0, LCD_WIDTH - 1);
+                *ly = clampi(*ly + TOUCH_OFFSET_Y, 0, LCD_HEIGHT - 1);
+        }
+}
+
+static void lcd_fill_rgb565(uint16_t color)
+{
+        uint8_t px[2] = {(uint8_t)(color >> 8), (uint8_t)color};
+        lcd_set_window(0, 0, LCD_WIDTH - 1, LCD_HEIGHT - 1);
+        lcd_dc(true);
+        lcd_cs(true);
+        for (int y = 0; y < LCD_HEIGHT; y++) {
+                for (int x = 0; x < LCD_WIDTH; x++) {
+                        lcd_write_bytes(px, sizeof(px));
+                }
+        }
+        lcd_cs(false);
+}
+
+static void lcd_draw_cross(int cx, int cy, int size, uint16_t color)
+{
+        if (size < 1) {
+                size = 1;
+        }
+        uint8_t px[2] = {(uint8_t)(color >> 8), (uint8_t)color};
+        int x0 = clampi(cx - size, 0, LCD_WIDTH - 1);
+        int x1 = clampi(cx + size, 0, LCD_WIDTH - 1);
+        int y0 = clampi(cy - size, 0, LCD_HEIGHT - 1);
+        int y1 = clampi(cy + size, 0, LCD_HEIGHT - 1);
+
+        lcd_set_window(x0, cy, x1, cy);
+        lcd_dc(true);
+        lcd_cs(true);
+        for (int x = x0; x <= x1; x++) {
+                lcd_write_bytes(px, sizeof(px));
+        }
+        lcd_cs(false);
+
+        lcd_set_window(cx, y0, cx, y1);
+        lcd_dc(true);
+        lcd_cs(true);
+        for (int y = y0; y <= y1; y++) {
+                lcd_write_bytes(px, sizeof(px));
+        }
+        lcd_cs(false);
+}
+
+void video_touch_set_calibration(const touch_calibration_t *cal)
+{
+        if (!cal) {
+                return;
+        }
+        int min_x = cal->raw_min_x;
+        int max_x = cal->raw_max_x;
+        int min_y = cal->raw_min_y;
+        int max_y = cal->raw_max_y;
+        if (max_x <= min_x + 20 || max_y <= min_y + 20) {
+                return;
+        }
+        touch_raw_min_x = min_x;
+        touch_raw_max_x = max_x;
+        touch_raw_min_y = min_y;
+        touch_raw_max_y = max_y;
+}
+
+bool video_touch_calibrate(touch_calibration_t *out)
+{
+        if (!out) {
+                return false;
+        }
+
+        static const int margin = 22;
+        static const int target_x[4] = {
+                margin,
+                LCD_WIDTH - 1 - margin,
+                LCD_WIDTH - 1 - margin,
+                margin,
+        };
+        static const int target_y[4] = {
+                margin,
+                margin,
+                LCD_HEIGHT - 1 - margin,
+                LCD_HEIGHT - 1 - margin,
+        };
+        int raw_x[4] = {0};
+        int raw_y[4] = {0};
+
+        touch_last_valid = false;
+        cursor_button = 0;
+        lcd_fill_rgb565(0xFFFF);
+        sleep_ms(200);
+
+        for (int i = 0; i < 4; i++) {
+                lcd_fill_rgb565(0xFFFF);
+                lcd_draw_cross(target_x[i], target_y[i], 14, 0x0000);
+
+                int rx = 0, ry = 0;
+                absolute_time_t wait_release_start = get_absolute_time();
+                while (touch_read_raw(&rx, &ry)) {
+                        if (absolute_time_diff_us(wait_release_start, get_absolute_time()) > 3 * 1000 * 1000) {
+                                return false;
+                        }
+                        sleep_ms(30);
+                }
+
+                int sx = 0;
+                int sy = 0;
+                int samples = 0;
+                absolute_time_t start = get_absolute_time();
+                while (absolute_time_diff_us(start, get_absolute_time()) < 12 * 1000 * 1000) {
+                        if (touch_read_raw(&rx, &ry)) {
+                                sx += rx;
+                                sy += ry;
+                                samples++;
+                                if (samples >= 14) {
+                                        break;
+                                }
+                        }
+                        sleep_ms(20);
+                }
+                if (samples < 4) {
+                        return false;
+                }
+                raw_x[i] = sx / samples;
+                raw_y[i] = sy / samples;
+
+                absolute_time_t release_start = get_absolute_time();
+                while (touch_read_raw(&rx, &ry)) {
+                        if (absolute_time_diff_us(release_start, get_absolute_time()) > 3 * 1000 * 1000) {
+                                break;
+                        }
+                        sleep_ms(25);
+                }
+                sleep_ms(120);
+        }
+
+        int tx[4] = {0};
+        int ty[4] = {0};
+        for (int i = 0; i < 4; i++) {
+                touch_raw_normalize_axes(raw_x[i], raw_y[i], &tx[i], &ty[i]);
+        }
+
+        int left = (tx[0] + tx[3]) / 2;
+        int right = (tx[1] + tx[2]) / 2;
+        int top = (ty[0] + ty[1]) / 2;
+        int bottom = (ty[2] + ty[3]) / 2;
+
+#if TOUCH_INVERT_X
+        out->raw_min_x = right;
+        out->raw_max_x = left;
+#else
+        out->raw_min_x = left;
+        out->raw_max_x = right;
+#endif
+#if TOUCH_INVERT_Y
+        out->raw_min_y = bottom;
+        out->raw_max_y = top;
+#else
+        out->raw_min_y = top;
+        out->raw_max_y = bottom;
+#endif
+
+        if (out->raw_max_x <= out->raw_min_x + 20 ||
+            out->raw_max_y <= out->raw_min_y + 20) {
+                return false;
+        }
+
+        video_touch_set_calibration(out);
+        log_printf("touch calibration: x[%d..%d] y[%d..%d]\n",
+                   out->raw_min_x, out->raw_max_x, out->raw_min_y, out->raw_max_y);
+
+        lcd_fill_rgb565(0xFFFF);
+        sleep_ms(180);
+        return true;
 }
 
 static void touch_update_mouse(void)
@@ -370,11 +577,33 @@ static void touch_update_mouse(void)
                 touch_last_ly = ly;
                 touch_last_valid = true;
 
+                bool one_to_one = (view_x0 == 0 && view_y0 == 0 &&
+                                   view_w == DISP_WIDTH && view_h == DISP_HEIGHT &&
+                                   DISP_WIDTH == LCD_WIDTH && DISP_HEIGHT == LCD_HEIGHT);
                 /* Then map from displayed viewport (letterboxed region) to Mac space. */
                 int vx = clampi(lx - view_x0, 0, view_w - 1);
                 int vy = clampi(ly - view_y0, 0, view_h - 1);
-                int mx = map_coord(vx, DISP_WIDTH, view_w);
-                int my = map_coord(vy, DISP_HEIGHT, view_h);
+                if (!one_to_one) {
+                        /* Snap near physical edges to logical edges to tolerate calibration drift. */
+                        int edge_snap_x = TOUCH_EDGE_SNAP_X;
+                        int edge_snap_y = TOUCH_EDGE_SNAP_Y;
+                        if (edge_snap_x < 0) edge_snap_x = 0;
+                        if (edge_snap_y < 0) edge_snap_y = 0;
+                        if (edge_snap_x > (view_w / 3)) edge_snap_x = view_w / 3;
+                        if (edge_snap_y > (view_h / 3)) edge_snap_y = view_h / 3;
+                        if (vx <= edge_snap_x) {
+                                vx = 0;
+                        } else if (vx >= (view_w - 1 - edge_snap_x)) {
+                                vx = view_w - 1;
+                        }
+                        if (vy <= edge_snap_y) {
+                                vy = 0;
+                        } else if (vy >= (view_h - 1 - edge_snap_y)) {
+                                vy = view_h - 1;
+                        }
+                }
+                int mx = one_to_one ? vx : map_coord(vx, DISP_WIDTH, view_w);
+                int my = one_to_one ? vy : map_coord(vy, DISP_HEIGHT, view_h);
                 cursor_x = mx;
                 cursor_y = my;
                 cursor_button = 1;
@@ -498,7 +727,7 @@ static void lcd_push_lines(int start_y, int line_count)
 
 void video_init(uint32_t *framebuffer)
 {
-        printf("Video init (Waveshare LCD)\n");
+        log_printf("Video init (Waveshare LCD)\n");
         video_framebuffer = framebuffer;
         video_framebuffer_bytes = (uint8_t *)framebuffer;
 #if LCD_PRESERVE_ASPECT
@@ -577,3 +806,16 @@ void video_task(void)
                 last_frame = now;
         }
 }
+
+#if !USE_TOUCH
+void video_touch_set_calibration(const touch_calibration_t *cal)
+{
+        (void)cal;
+}
+
+bool video_touch_calibrate(touch_calibration_t *out)
+{
+        (void)out;
+        return false;
+}
+#endif

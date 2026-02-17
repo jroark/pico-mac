@@ -42,6 +42,7 @@
 #include "pio_video.pio.h"
 
 #include "hw.h"
+#include "log.h"
 
 ////////////////////////////////////////////////////////////////////////////////
 /* VESA VGA mode 640x480@60 */
@@ -312,7 +313,7 @@ static void     video_init_dma()
  */
 void    video_init(uint32_t *framebuffer)
 {
-        printf("Video init\n");
+        log_printf("Video init\n");
 
         pio_video_program_init(pio0, 0,
                                pio_add_program(pio0, &pio_video_program),
@@ -347,4 +348,15 @@ void    video_init(uint32_t *framebuffer)
 void    video_task(void)
 {
         /* VGA path is fully DMA/PIO-driven after video_init(). */
+}
+
+void video_touch_set_calibration(const touch_calibration_t *cal)
+{
+        (void)cal;
+}
+
+bool video_touch_calibrate(touch_calibration_t *out)
+{
+        (void)out;
+        return false;
 }

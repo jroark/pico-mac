@@ -92,6 +92,8 @@ higher resolution, to change pin configs, etc.:
       - `-DSD_SCK=<gpio pin>`
       - `-DSD_CS=<gpio pin>`
       - `-DSD_MHZ=<integer speed in MHz>`
+     When SD support is enabled and mount succeeds, firmware logs are
+     also appended to `/umac.log` on the card.
    * `-DMEMSIZE=<size in KB>`: The maximum practical size is about
      208KB, but values between 128 and 208 should work on a RP2040.
      Note that although apps and Mac OS seem to gracefully detect free
@@ -122,6 +124,8 @@ higher resolution, to change pin configs, etc.:
         `-DTOUCH_MHZ=<MHz> -DTOUCH_PIN_CS=<gpio> -DTOUCH_PIN_IRQ=<gpio> -DTOUCH_USE_IRQ=<0|1>`
         `-DTOUCH_RAW_MIN_X=<n> -DTOUCH_RAW_MAX_X=<n> -DTOUCH_RAW_MIN_Y=<n> -DTOUCH_RAW_MAX_Y=<n>`
         `-DTOUCH_SWAP_XY=<0|1> -DTOUCH_INVERT_X=<0|1> -DTOUCH_INVERT_Y=<0|1>`
+        `-DTOUCH_OFFSET_X=<px> -DTOUCH_OFFSET_Y=<px>`
+        `-DTOUCH_EDGE_SNAP_X=<px> -DTOUCH_EDGE_SNAP_Y=<px>`
    * `-DVIDEO_PIN=<GPIO pin>`: Move the video output pins; defaults
      to the pinout shown below.
 
@@ -175,6 +179,9 @@ Practical tips:
      and ensure the touch IRQ pin is actually connected to the configured GPIO.
    * If SD and LCD share SPI, access is serialized in firmware; heavy SD traffic
      can still make pointer updates feel less responsive.
+   * Experimental: with `USE_SD=1 -DUSE_BOOTSEL_CAPTURE=1`, pressing the Pico
+     board `BOOTSEL` button captures the current Mac framebuffer to the SD root
+     as `CAPxxxx.PBM` (portable bitmap, 1bpp, binary `P4`).
 
 Example with explicit touch overrides:
 

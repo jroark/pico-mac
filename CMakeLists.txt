@@ -28,6 +28,8 @@ cmake_minimum_required(VERSION 3.13)
 # Options that should be defined when initialising the build
 # directory with cmake, e.g. "cmake .. -DOPTION=true":
 #
+set(TARGET_PLATFORM "pico" CACHE STRING "Target platform: pico or esp32s3")
+set_property(CACHE TARGET_PLATFORM PROPERTY STRINGS pico esp32s3)
 
 option(USE_SD "Build in SD support" OFF)
 set(SD_TX 3 CACHE STRING "SD SPI TX pin")
@@ -81,8 +83,13 @@ include(pico_sdk_import.cmake)
 
 project(firmware)
 
+if (NOT TARGET_PLATFORM STREQUAL "pico")
+  message(FATAL_ERROR "TARGET_PLATFORM=${TARGET_PLATFORM} is not buildable in this CMake yet. Start the ESP32-S3 port from ports/esp32s3.")
+endif()
+
 # initialize the Raspberry Pi Pico SDK
 pico_sdk_init()
+add_compile_definitions(PLATFORM_PICO=1 PLATFORM_ESP32S3=0)
 
 # For TUSB host stuff:
 set(FAMILY rp2040)
@@ -191,6 +198,7 @@ endif()
 if (TARGET tinyusb_device)
   add_executable(firmware
     src/main.c
+    src/platform_pico.c
     src/log.c
     ${VIDEO_SRC}
     src/kbd.c

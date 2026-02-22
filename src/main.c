@@ -31,17 +31,10 @@
 #include <string.h>
 #include "hardware/clocks.h"
 #include "hardware/gpio.h"
-#include "hardware/pio.h"
-#include "hardware/sync.h"
-#if USE_BOOTSEL_CAPTURE
-#include "hardware/regs/io_qspi.h"
-#include "hardware/structs/ioqspi.h"
-#include "hardware/structs/sio.h"
-#endif
 #include "pico/multicore.h"
 #include "pico/stdlib.h"
-#include "pico/time.h"
 #include "hw.h"
+#include "platform.h"
 #include "video.h"
 #include "kbd.h"
 #include "log.h"
@@ -81,21 +74,20 @@ static uint8_t umac_ram[RAM_SIZE];
 
 static void     io_init()
 {
-        gpio_init(GPIO_LED_PIN);
-        gpio_set_dir(GPIO_LED_PIN, GPIO_OUT);
+        platform_led_init();
 }
 
 static void     poll_led_etc()
 {
-        static int led_on = 0;
-        static absolute_time_t last = 0;
-        absolute_time_t now = get_absolute_time();
+        static bool led_on = false;
+        static uint64_t last_us = 0;
+        uint64_t now_us = platform_time_us();
 
-        if (absolute_time_diff_us(last, now) > 500*1000) {
-                last = now;
+        if ((now_us - last_us) > 500000) {
+                last_us = now_us;
 
-                led_on ^= 1;
-                gpio_put(GPIO_LED_PIN, led_on);
+                led_on = !led_on;
+                platform_led_set(led_on);
         }
 }
 
@@ -109,32 +101,6 @@ static sd_card_t *mounted_sd = NULL;
 static const uint8_t *capture_fb_base = NULL;
 
 #if USE_BOOTSEL_CAPTURE
-/* BOOTSEL read helper: returns true when CS is high (not pressed). */
-bool __no_inline_not_in_flash_func(get_bootsel_button_state)(void)
-{
-        const uint CS_PIN_INDEX = 1;
-        uint32_t flags = save_and_disable_interrupts();
-
-        hw_write_masked(&ioqspi_hw->io[CS_PIN_INDEX].ctrl,
-                        GPIO_OVERRIDE_LOW << IO_QSPI_GPIO_QSPI_SS_CTRL_OEOVER_LSB,
-                        IO_QSPI_GPIO_QSPI_SS_CTRL_OEOVER_BITS);
-        for (volatile int i = 0; i < 1000; ++i) {
-        }
-
-#ifdef __ARM_ARCH_6M__
-#define CS_BIT (1u << 1)
-#else
-#define CS_BIT SIO_GPIO_HI_IN_QSPI_CSN_BITS
-#endif
-        bool not_pressed = (sio_hw->gpio_hi_in & CS_BIT) != 0;
-
-        hw_write_masked(&ioqspi_hw->io[CS_PIN_INDEX].ctrl,
-                        GPIO_OVERRIDE_NORMAL << IO_QSPI_GPIO_QSPI_SS_CTRL_OEOVER_LSB,
-                        IO_QSPI_GPIO_QSPI_SS_CTRL_OEOVER_BITS);
-        restore_interrupts(flags);
-        return not_pressed;
-}
-
 static void capture_write_screenshot(void)
 {
         if (!sd_ready || !capture_fb_base) {
@@ -200,19 +166,19 @@ static void capture_write_screenshot(void)
 static void capture_button_task(void)
 {
         static bool last_pressed = false;
-        static absolute_time_t last_poll = 0;
-        static absolute_time_t last_capture = 0;
-        absolute_time_t now = get_absolute_time();
+        static uint64_t last_poll_us = 0;
+        static uint64_t last_capture_us = 0;
+        uint64_t now_us = platform_time_us();
 
-        if (absolute_time_diff_us(last_poll, now) < 60 * 1000) {
+        if ((now_us - last_poll_us) < (60 * 1000)) {
                 return;
         }
-        last_poll = now;
+        last_poll_us = now_us;
 
-        bool pressed = !get_bootsel_button_state();
+        bool pressed = platform_bootsel_pressed();
         if (pressed && !last_pressed &&
-            absolute_time_diff_us(last_capture, now) > 700 * 1000) {
-                last_capture = now;
+            (now_us - last_capture_us) > (700 * 1000)) {
+                last_capture_us = now_us;
                 capture_write_screenshot();
         }
         last_pressed = pressed;
@@ -222,22 +188,22 @@ static void capture_button_task(void)
 
 static void     poll_umac()
 {
-        static absolute_time_t last_1hz = 0;
-        static absolute_time_t last_vsync = 0;
-        absolute_time_t now = get_absolute_time();
+        static uint64_t last_1hz_us = 0;
+        static uint64_t last_vsync_us = 0;
+        uint64_t now_us = platform_time_us();
 
         umac_loop();
 
-        int64_t p_1hz = absolute_time_diff_us(last_1hz, now);
-        int64_t p_vsync = absolute_time_diff_us(last_vsync, now);
+        uint64_t p_1hz = now_us - last_1hz_us;
+        uint64_t p_vsync = now_us - last_vsync_us;
         if (p_vsync >= 16667) {
                 /* FIXME: Trigger this off actual vsync */
                 umac_vsync_event();
-                last_vsync = now;
+                last_vsync_us = now_us;
         }
         if (p_1hz >= 1000000) {
                 umac_1hz_event();
-                last_1hz = now;
+                last_1hz_us = now_us;
         }
 
         int update = 0;

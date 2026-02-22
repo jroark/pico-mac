@@ -102,7 +102,8 @@ static esp_err_t lcd_blit_mono_internal(const uint8_t *fb, int fb_width, int fb_
                         uint8_t b = row[src_x >> 3];
                         int bit = 7 - (src_x & 7);
                         bool on = ((b >> bit) & 1) != 0;
-                        uint16_t px = on ? 0xffff : 0x0000;
+                        /* Mac framebuffer bit=1 should render black, bit=0 white. */
+                        uint16_t px = on ? 0x0000 : 0xffff;
                         line[x] = (uint16_t)((px << 8) | (px >> 8));
                 }
                 err = lcd_data(line, sizeof(line));
@@ -188,6 +189,7 @@ static esp_err_t lcd_init_panel(void)
         ESP_RETURN_ON_ERROR(lcd_data(&data, 1), TAG, "MADCTL data");
 
         ESP_RETURN_ON_ERROR(lcd_cmd(0x21), TAG, "INVON");
+        ESP_RETURN_ON_ERROR(lcd_cmd(0x13), TAG, "NORON");
         ESP_RETURN_ON_ERROR(lcd_cmd(0x29), TAG, "DISPON");
         vTaskDelay(pdMS_TO_TICKS(20));
 

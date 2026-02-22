@@ -8,7 +8,7 @@ This directory contains the ESP-IDF firmware path for ESP32-S3 boards.
 - ILI9341 SPI LCD output
 - XPT2046 touch input
 - SD card mount over SPI (`SDSPI`)
-- SD disk image access through file-backed callbacks (no full image RAM copy)
+- SD disk image load from SD at boot (RAM-first, file-backed fallback on low heap)
 
 RP2040 remains the primary target; this port is still experimental.
 
@@ -47,4 +47,3 @@ idf.py -p /dev/cu.usbmodem1101 monitor
   - `umac0.img`, `UMAC0.IMG`, `disc.img`, `disc.dsk`, `system.img`, `system.dsk`
   - first `*.img|*.dsk|*.dc42` found is used
 - If open/mount fails, firmware falls back to built-in `incbin` disk image.
-

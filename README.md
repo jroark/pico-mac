@@ -206,7 +206,7 @@ Port work has started under:
 Current status:
 - ESP-IDF app path is available under `ports/esp32s3/`
 - Shared SPI LCD + touch + SD stack is implemented for Waveshare 2.8 wiring
-- SD disk images are file-backed (no full-image RAM copy required)
+- SD disk images load from SD at boot (RAM-first, file-backed fallback on low heap)
 - USB monitor logging is available via `idf.py monitor`
 - RP2040 remains the primary/most stable target
 

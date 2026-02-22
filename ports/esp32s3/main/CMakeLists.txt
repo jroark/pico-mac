@@ -5,6 +5,8 @@ idf_component_register(
     SRCS
         "app_main.c"
         "lcd_bringup.c"
+        "sdcard_disc.c"
+        "touch_input.c"
         ${UMAC_ROOT}/src/disc.c
         ${UMAC_ROOT}/src/main.c
         ${UMAC_ROOT}/src/rom.c
@@ -19,6 +21,12 @@ idf_component_register(
         ${UMAC_ROOT}/include
         ${MUSASHI_ROOT}
         ${CMAKE_CURRENT_LIST_DIR}/../../../incbin
+    REQUIRES
+        esp_timer
+        esp_driver_spi
+        esp_driver_sdspi
+        fatfs
+        sdmmc
 )
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE

@@ -73,6 +73,8 @@ void app_main(void)
         ESP_LOGI(TAG, "ESP32-S3 port scaffold started");
         ESP_LOGI(TAG, "Pin map: SCK=%d MOSI=%d MISO=%d", PM_SPI_SCK_GPIO, PM_SPI_MOSI_GPIO, PM_SPI_MISO_GPIO);
         ESP_LOGI(TAG, "Pin map: LCD CS=%d DC=%d RST=%d BL=%d", PM_LCD_CS_GPIO, PM_LCD_DC_GPIO, PM_LCD_RST_GPIO, PM_LCD_BL_GPIO);
+        ESP_LOGI(TAG, "Pin map: TOUCH CS=%d IRQ=%d SD CS=%d", PM_TOUCH_CS_GPIO, PM_TOUCH_IRQ_GPIO, PM_SD_CS_GPIO);
+
         if (!lcd_panel_init()) {
                 ESP_LOGE(TAG, "LCD bring-up failed");
                 while (true) {
@@ -96,6 +98,7 @@ void app_main(void)
                 }
         }
         ESP_LOGI(TAG, "umac started, framebuffer %dx%d", DISP_WIDTH, DISP_HEIGHT);
+
         if (!touch_input_init()) {
                 ESP_LOGW(TAG, "touch init failed; continuing without touch");
         }

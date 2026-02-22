@@ -1,63 +1,50 @@
-# ESP32-S3 Port (Work In Progress)
+# ESP32-S3 Port (Experimental)
 
-This directory tracks the ESP32-S3 port effort for `pico-mac`.
+This directory contains the ESP-IDF firmware path for ESP32-S3 boards.
 
-## Current status
+## Current scope
 
-- Platform abstraction started in main firmware:
-  - `include/platform.h`
-  - `src/platform_pico.c`
-- `src/main.c` now uses the platform abstraction for:
-  - LED heartbeat
-  - microsecond timing
-  - BOOTSEL screenshot button polling
+- uMac core boots and runs
+- ILI9341 SPI LCD output
+- XPT2046 touch input
+- SD card mount over SPI (`SDSPI`)
+- SD disk image access through file-backed callbacks (no full image RAM copy)
 
-## Goal for first bring-up (Phase 1)
+RP2040 remains the primary target; this port is still experimental.
 
-Boot the emulator core with:
+## Board/pin mapping (YD-ESP32-23)
 
-- SPI LCD output (`video_waveshare_lcd.c` equivalent on ESP-IDF SPI)
-- Touch input (XPT2046)
-- SD card disk/log file support (SDSPI + FatFS)
-- USB HID host keyboard/mouse via TinyUSB host
+Defined in `main/pinmap.h`:
 
-## Initial pin mapping (YD-ESP32-23)
-
-This mapping is now defined in `main/pinmap.h`:
-
-- SPI bus:
+- Shared SPI bus:
   - `SCK=GPIO12`
   - `MOSI=GPIO11`
   - `MISO=GPIO13`
 - Chip selects:
   - `LCD_CS=GPIO10`
   - `TOUCH_CS=GPIO9`
-  - `SD_CS=GPIO14`
+  - `SD_CS=GPIO14` (fallback probe also tries GPIO15)
 - LCD control:
   - `LCD_DC=GPIO8`
   - `LCD_RST=GPIO7`
   - `LCD_BL=GPIO6`
-- Touch:
+- Touch IRQ:
   - `TOUCH_IRQ=GPIO5`
-- Debug LED:
-  - `STATUS_LED=GPIO48`
 
-Reserved/avoid:
+## Build / flash / monitor
 
-- Keep `GPIO19/GPIO20` free for native USB D-/D+.
-- Avoid boot strap pins for peripheral wiring (`GPIO0`, `GPIO45`, `GPIO46`).
+```bash
+cd ports/esp32s3
+source ~/src/esp/esp-idf/export.sh
+idf.py build
+idf.py -p /dev/cu.usbmodem1101 flash
+idf.py -p /dev/cu.usbmodem1101 monitor
+```
 
-## Recommended work order
+## SD image behavior
 
-1. Create an ESP-IDF app skeleton with `app_main()`.
-2. Implement `platform_esp32s3.c` for timing/LED/button primitives.
-3. Add ESP-IDF SPI bus manager with shared LCD/touch/SD arbitration.
-4. Port `video_waveshare_lcd.c` hardware calls from Pico SDK to ESP-IDF.
-5. Port SD mount + file I/O glue from FatFs_SPI to `esp_vfs_fat`.
-6. Port USB HID host glue (`hid.c`) to TinyUSB host under ESP-IDF.
-7. Replace Pico multicore assumptions with FreeRTOS task model.
+- SD root is scanned for common image names and extensions:
+  - `umac0.img`, `UMAC0.IMG`, `disc.img`, `disc.dsk`, `system.img`, `system.dsk`
+  - first `*.img|*.dsk|*.dc42` found is used
+- If open/mount fails, firmware falls back to built-in `incbin` disk image.
 
-## Notes
-
-- RP2040 VGA path (`src/video.c`, `src/pio_video.pio`) is intentionally out of scope for the ESP32-S3 path.
-- Top-level CMake currently builds only `TARGET_PLATFORM=pico`.

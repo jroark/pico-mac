@@ -153,8 +153,14 @@ static esp_err_t lcd_init_spi(void)
                         .quadhd_io_num = -1,
                         .max_transfer_sz = 4096,
                 };
-                ESP_RETURN_ON_ERROR(spi_bus_initialize(LCD_HOST, &buscfg, SPI_DMA_CH_AUTO),
-                                    TAG, "spi_bus_initialize");
+                esp_err_t berr = spi_bus_initialize(LCD_HOST, &buscfg, SPI_DMA_CH_AUTO);
+                if (berr != ESP_OK && berr != ESP_ERR_INVALID_STATE) {
+                        ESP_LOGE(TAG, "spi_bus_initialize failed: %s", esp_err_to_name(berr));
+                        return berr;
+                }
+                if (berr == ESP_ERR_INVALID_STATE) {
+                        ESP_LOGW(TAG, "SPI bus already initialized; reusing existing bus");
+                }
 
                 spi_device_interface_config_t devcfg = {
                         .clock_speed_hz = 26 * 1000 * 1000,

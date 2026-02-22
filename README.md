@@ -8,12 +8,12 @@ This tree currently has:
 - USB HID keyboard/mouse input
 - Optional SD-backed disk images and log file output
 - Touchscreen mouse support with persistent pre-boot calibration (Waveshare mode)
-- Early ESP32-S3 port scaffold in `ports/esp32s3/`
+- Experimental ESP32-S3 port in `ports/esp32s3/`
 
 ## Project Status
 
 - Primary target: **RP2040/Pico**
-- ESP32-S3: **work in progress scaffold only** (not feature-complete yet)
+- ESP32-S3: **experimental** (LCD + touch + SD image path available)
 
 ## Quick Start (RP2040)
 
@@ -204,9 +204,11 @@ Port work has started under:
 - `ports/esp32s3/`
 
 Current status:
-- ESP-IDF scaffold present
-- Initial pin mapping documented in `ports/esp32s3/main/pinmap.h`
-- Not yet wired to full emulator/video/touch/SD/HID stack
+- ESP-IDF app path is available under `ports/esp32s3/`
+- Shared SPI LCD + touch + SD stack is implemented for Waveshare 2.8 wiring
+- SD disk images are file-backed (no full-image RAM copy required)
+- USB monitor logging is available via `idf.py monitor`
+- RP2040 remains the primary/most stable target
 
 For details, see:
 - `ports/esp32s3/README.md`
@@ -217,11 +219,10 @@ For details, see:
   - delete build directory and rerun CMake
 - Touch alignment issues:
   - remove `touch.cal` on SD to force recalibration at next boot
-- No SD logs:
-  - confirm card mounts and is FAT-formatted
-  - check for `umac.log` in card root
 - Cursor jitter on shared SPI:
   - reduce SD traffic and verify touch IRQ pin wiring
+- ESP32 USB debug logs:
+  - `cd ports/esp32s3 && source ~/src/esp/esp-idf/export.sh && idf.py -p /dev/cu.usbmodem1101 monitor`
 
 ## Acknowledgements
 

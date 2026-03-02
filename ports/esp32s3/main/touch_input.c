@@ -1,333 +1,205 @@
 #include "touch_input.h"
+#include "pinmap_ws28b.h"
+#include "tca9554.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
+#include "driver/i2c.h"
 #include "driver/gpio.h"
-#include "driver/spi_master.h"
-#include "esp_err.h"
 #include "esp_log.h"
-#include "esp_timer.h"
-#include "pinmap.h"
+#include "esp_lcd_touch_gt911.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
-#define TOUCH_HOST SPI2_HOST
-#define TOUCH_HZ (1 * 1000 * 1000)
-
-#define LCD_WIDTH 320
-#define LCD_HEIGHT 240
-
-#define TOUCH_RAW_MIN_X 220
-#define TOUCH_RAW_MAX_X 3880
-#define TOUCH_RAW_MIN_Y 220
-#define TOUCH_RAW_MAX_Y 3880
-#define TOUCH_SWAP_XY 1
-#define TOUCH_INVERT_X 1
-#define TOUCH_INVERT_Y 0
-#define TOUCH_EDGE_SNAP_X 8
-#define TOUCH_EDGE_SNAP_Y 8
-
-static const char *TAG = "touch";
-static spi_device_handle_t s_touch_spi;
-static bool s_touch_ready = false;
-static bool s_last_valid = false;
-static int s_last_x = 0;
-static int s_last_y = 0;
-static int s_last_button = 0;
-static int s_raw_min_x = TOUCH_RAW_MIN_X;
-static int s_raw_max_x = TOUCH_RAW_MAX_X;
-static int s_raw_min_y = TOUCH_RAW_MIN_Y;
-static int s_raw_max_y = TOUCH_RAW_MAX_Y;
-static int s_obs_min_x = 4095;
-static int s_obs_max_x = 0;
-static int s_obs_min_y = 4095;
-static int s_obs_max_y = 0;
-static int s_obs_count = 0;
-static int s_valid_streak = 0;
-static int s_invalid_streak = 0;
-static int s_hist_x[3] = {0};
-static int s_hist_y[3] = {0};
-static int s_hist_count = 0;
-static int s_hist_head = 0;
-
-static int clampi(int v, int lo, int hi)
-{
-        if (v < lo) return lo;
-        if (v > hi) return hi;
-        return v;
-}
-
-static int map_axis(int raw, int in_min, int in_max, int out_max)
-{
-        if (in_max <= in_min) {
-                return out_max / 2;
-        }
-        int v = raw;
-        if (v < in_min) v = in_min;
-        if (v > in_max) v = in_max;
-        return ((v - in_min) * out_max) / (in_max - in_min);
-}
-
-static int median3(int a, int b, int c)
-{
-        if (a > b) { int t = a; a = b; b = t; }
-        if (b > c) { int t = b; b = c; c = t; }
-        if (a > b) { int t = a; a = b; b = t; }
-        return b;
-}
-
-static bool touch_pressed_irq(void)
-{
-        return gpio_get_level(PM_TOUCH_IRQ_GPIO) == 0;
-}
-
-static uint16_t touch_read_axis(uint8_t cmd)
-{
-        uint8_t tx[3] = {cmd, 0, 0};
-        uint8_t rx[3] = {0, 0, 0};
-        spi_transaction_t t = {
-                .length = 24,
-                .tx_buffer = tx,
-                .rx_buffer = rx,
-        };
-        if (spi_device_transmit(s_touch_spi, &t) != ESP_OK) {
-                return 0;
-        }
-        return (uint16_t)(((rx[1] << 8) | rx[2]) >> 3);
-}
-
-static bool touch_read_raw(int *raw_x, int *raw_y)
-{
-        /* Median over 5 samples + pressure gate for stable XPT2046 reads. */
-        uint16_t xs[5];
-        uint16_t ys[5];
-        for (int i = 0; i < 5; i++) {
-                xs[i] = touch_read_axis(0xD0);
-                ys[i] = touch_read_axis(0x90);
-        }
-        uint16_t z1 = touch_read_axis(0xB0);
-        uint16_t z2 = touch_read_axis(0xC0);
-        for (int i = 0; i < 4; i++) {
-                for (int j = i + 1; j < 5; j++) {
-                        if (xs[j] < xs[i]) { uint16_t t = xs[i]; xs[i] = xs[j]; xs[j] = t; }
-                        if (ys[j] < ys[i]) { uint16_t t = ys[i]; ys[i] = ys[j]; ys[j] = t; }
-                }
-        }
-        *raw_x = xs[2];
-        *raw_y = ys[2];
-        bool irq_pressed = touch_pressed_irq();
-        bool z_valid = (z1 > 20 && z1 < 4090 && z2 > 20 && z2 < 4090);
-        bool pressure_pressed = (z2 > (z1 + 25));
-        bool xy_valid = (*raw_x > 20 && *raw_x < 4090 && *raw_y > 20 && *raw_y < 4090);
-        bool spread_ok = ((xs[4] - xs[0]) <= 250) && ((ys[4] - ys[0]) <= 250);
-        /* Accept press if either hardware IRQ or pressure looks valid. */
-        bool pressed = irq_pressed || pressure_pressed;
-        return (z_valid && xy_valid && spread_ok && pressed);
-}
-
-static void touch_raw_normalize_axes(int raw_x, int raw_y, int *tx, int *ty)
-{
-        int nx = raw_x;
-        int ny = raw_y;
-#if TOUCH_SWAP_XY
-        int t = nx;
-        nx = ny;
-        ny = t;
+#ifndef DISP_WIDTH
+#define DISP_WIDTH 640
 #endif
-        *tx = nx;
-        *ty = ny;
-}
-
-static void touch_raw_to_lcd(int raw_x, int raw_y, int *lx, int *ly)
-{
-        int tx = 0;
-        int ty = 0;
-        touch_raw_normalize_axes(raw_x, raw_y, &tx, &ty);
-        *lx = map_axis(tx, s_raw_min_x, s_raw_max_x, LCD_WIDTH - 1);
-        *ly = map_axis(ty, s_raw_min_y, s_raw_max_y, LCD_HEIGHT - 1);
-#if TOUCH_INVERT_X
-        *lx = (LCD_WIDTH - 1) - *lx;
+#ifndef DISP_HEIGHT
+#define DISP_HEIGHT 480
 #endif
-#if TOUCH_INVERT_Y
-        *ly = (LCD_HEIGHT - 1) - *ly;
-#endif
-        *lx = clampi(*lx, 0, LCD_WIDTH - 1);
-        *ly = clampi(*ly, 0, LCD_HEIGHT - 1);
-}
 
-static void touch_cal_observe(int raw_x, int raw_y)
+static const char *TAG = "TOUCH_GT911";
+static esp_lcd_touch_handle_t touch_handle = NULL;
+
+/* Board-specific GT911 reset/address-select sequence (Waveshare 2.8B). */
+static void gt911_board_reset_select_addr(bool addr_0x5d)
 {
-        int tx = 0;
-        int ty = 0;
-        touch_raw_normalize_axes(raw_x, raw_y, &tx, &ty);
-
-        if (tx < s_obs_min_x) s_obs_min_x = tx;
-        if (tx > s_obs_max_x) s_obs_max_x = tx;
-        if (ty < s_obs_min_y) s_obs_min_y = ty;
-        if (ty > s_obs_max_y) s_obs_max_y = ty;
-        s_obs_count++;
-        if (s_obs_count < 120) {
-                return;
-        }
-
-        int target_min_x = clampi(s_obs_min_x - 40, 20, 3800);
-        int target_max_x = clampi(s_obs_max_x + 40, 300, 4090);
-        int target_min_y = clampi(s_obs_min_y - 40, 20, 3800);
-        int target_max_y = clampi(s_obs_max_y + 40, 300, 4090);
-        if ((target_max_x - target_min_x) < 1200 || (target_max_y - target_min_y) < 1200) {
-                return;
-        }
-
-        /* Slow adaptation reduces drift while still converging to real panel bounds. */
-        s_raw_min_x = (s_raw_min_x * 15 + target_min_x) / 16;
-        s_raw_max_x = (s_raw_max_x * 15 + target_max_x) / 16;
-        s_raw_min_y = (s_raw_min_y * 15 + target_min_y) / 16;
-        s_raw_max_y = (s_raw_max_y * 15 + target_max_y) / 16;
-}
-
-bool touch_input_init(void)
-{
-        gpio_config_t in = {
+        gpio_config_t irq_cfg = {
                 .pin_bit_mask = (1ULL << PM_TOUCH_IRQ_GPIO),
-                .mode = GPIO_MODE_INPUT,
+                .mode = GPIO_MODE_OUTPUT,
                 .pull_up_en = GPIO_PULLUP_ENABLE,
                 .pull_down_en = GPIO_PULLDOWN_DISABLE,
                 .intr_type = GPIO_INTR_DISABLE,
         };
-        if (gpio_config(&in) != ESP_OK) {
-                return false;
-        }
+        gpio_config(&irq_cfg);
+        gpio_set_level(PM_TOUCH_IRQ_GPIO, addr_0x5d ? 0 : 1);
+        vTaskDelay(pdMS_TO_TICKS(10));
 
-        spi_device_interface_config_t devcfg = {
-                .clock_speed_hz = TOUCH_HZ,
-                .mode = 0,
-                .spics_io_num = PM_TOUCH_CS_GPIO,
-                .queue_size = 1,
+        tca9554_set_mode(PM_EXIO_TP_RST, false);
+        tca9554_set_level(PM_EXIO_TP_RST, 0);
+        vTaskDelay(pdMS_TO_TICKS(120));
+        tca9554_set_level(PM_EXIO_TP_RST, 1);
+        vTaskDelay(pdMS_TO_TICKS(60));
+
+        gpio_set_level(PM_TOUCH_IRQ_GPIO, 1);
+        vTaskDelay(pdMS_TO_TICKS(20));
+        gpio_set_direction(PM_TOUCH_IRQ_GPIO, GPIO_MODE_INPUT);
+}
+
+bool touch_input_init(void)
+{
+        ESP_LOGI(TAG, "Initializing GT911 touch controller");
+
+        /* Match Waveshare bring-up: INT level during reset selects I2C address. */
+        gt911_board_reset_select_addr(true);
+
+        esp_lcd_panel_io_handle_t io_handle = NULL;
+        /* Primary address selected by reset sequence above. */
+        esp_lcd_panel_io_i2c_config_t i2c_conf = {
+                .dev_addr = ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS, /* 0x5D */
+                .control_phase_bytes = 1,
+                .dc_bit_offset = 0,
+                .lcd_cmd_bits = 16,
+                .lcd_param_bits = 0,
+                .flags = {
+                        .disable_control_phase = 1,
+                }
         };
-        esp_err_t err = spi_bus_add_device(TOUCH_HOST, &devcfg, &s_touch_spi);
-        if (err != ESP_OK) {
-                ESP_LOGE(TAG, "spi_bus_add_device failed: %s", esp_err_to_name(err));
-                return false;
+        esp_lcd_touch_io_gt911_config_t gt911_cfg = {
+                .dev_addr = i2c_conf.dev_addr,
+        };
+
+        // Note: I2C bus is already initialized by tca9554_init in lcd_ws28b_init
+        esp_err_t ret = esp_lcd_new_panel_io_i2c((esp_lcd_i2c_bus_handle_t)I2C_NUM_0, &i2c_conf, &io_handle);
+        if (ret != ESP_OK) return false;
+
+        esp_lcd_touch_config_t touch_config = {
+                /* Raw GT911 axes on this board: X=0..639, Y=0..479 */
+                .x_max = 640,
+                .y_max = 480,
+                .rst_gpio_num = -1, // Handled via expander
+                .int_gpio_num = PM_TOUCH_IRQ_GPIO,
+                .levels = {
+                        .reset = 0,
+                        .interrupt = 0,
+                },
+                .flags = {
+                        .swap_xy = 0,
+                        .mirror_x = 0,
+                        .mirror_y = 0,
+                },
+                .driver_data = &gt911_cfg,
+        };
+
+        ret = esp_lcd_touch_new_i2c_gt911(io_handle, &touch_config, &touch_handle);
+        if (ret != ESP_OK) {
+                ESP_LOGW(TAG, "GT911 init at 0x5D failed, trying 0x14");
+                gt911_board_reset_select_addr(false);
+                i2c_conf.dev_addr = ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS_BACKUP; /* 0x14 */
+                gt911_cfg.dev_addr = i2c_conf.dev_addr;
+                ret = esp_lcd_new_panel_io_i2c((esp_lcd_i2c_bus_handle_t)I2C_NUM_0, &i2c_conf, &io_handle);
+                if (ret == ESP_OK) {
+                        ret = esp_lcd_touch_new_i2c_gt911(io_handle, &touch_config, &touch_handle);
+                }
         }
 
-        s_last_valid = false;
-        s_last_button = 0;
-        s_obs_min_x = 4095;
-        s_obs_max_x = 0;
-        s_obs_min_y = 4095;
-        s_obs_max_y = 0;
-        s_obs_count = 0;
-        s_valid_streak = 0;
-        s_invalid_streak = 0;
-        s_hist_count = 0;
-        s_hist_head = 0;
-        s_touch_ready = true;
-        ESP_LOGI(TAG, "touch ready (XPT2046)");
+        if (ret != ESP_OK) return false;
+
+        ESP_LOGI(TAG, "GT911 initialized");
         return true;
 }
 
 bool touch_input_poll(int *dx, int *dy, int *button)
 {
-        if (!s_touch_ready || !dx || !dy || !button) {
-                return false;
-        }
+        if (!touch_handle) return false;
 
-        int raw_x = 0, raw_y = 0;
-        if (touch_read_raw(&raw_x, &raw_y)) {
-                s_invalid_streak = 0;
-                if (s_valid_streak < 3) {
-                        s_valid_streak++;
-                }
-                if (s_valid_streak < 2) {
+        esp_lcd_touch_point_data_t point;
+        uint8_t count;
+        
+        esp_lcd_touch_read_data(touch_handle);
+        esp_err_t err = esp_lcd_touch_get_data(touch_handle, &point, &count, 1);
+
+        static int last_out_x = 0;
+        static int last_out_y = 0;
+        static int last_raw_x = 0;
+        static int last_raw_y = 0;
+        static int filt_x_q8 = 0;
+        static int filt_y_q8 = 0;
+        static uint8_t last_track_id = 0xff;
+        static bool last_pressed = false;
+
+        if (err == ESP_OK && count > 0) {
+                /* Map controller range (~640x480) into current emulated framebuffer size. */
+                int sx = ((int)point.x * DISP_WIDTH) / 640;
+                int sy = ((int)point.y * DISP_HEIGHT) / 480;
+
+                if (sx < 0) sx = 0;
+                if (sx >= DISP_WIDTH) sx = DISP_WIDTH - 1;
+                if (sy < 0) sy = 0;
+                if (sy >= DISP_HEIGHT) sy = DISP_HEIGHT - 1;
+
+                if (!last_pressed) {
+                        last_raw_x = sx;
+                        last_raw_y = sy;
+                        filt_x_q8 = sx << 8;
+                        filt_y_q8 = sy << 8;
+                        last_out_x = sx;
+                        last_out_y = sy;
+                        last_track_id = point.track_id;
                         *dx = 0;
                         *dy = 0;
-                        *button = 0;
-                        return false;
-                }
-
-                touch_cal_observe(raw_x, raw_y);
-                int was_pressed = s_last_button;
-                int raw_x2 = 0, raw_y2 = 0;
-                int lx = 0, ly = 0;
-                if (s_last_valid) {
-                        const int max_step = 70;
-                        touch_raw_to_lcd(raw_x, raw_y, &lx, &ly);
-                        if (abs(lx - s_last_x) > max_step || abs(ly - s_last_y) > max_step) {
-                                if (touch_read_raw(&raw_x2, &raw_y2)) {
-                                        int lx2 = 0, ly2 = 0;
-                                        touch_raw_to_lcd(raw_x2, raw_y2, &lx2, &ly2);
-                                        if (abs(lx2 - s_last_x) > max_step || abs(ly2 - s_last_y) > max_step) {
-                                                lx = s_last_x;
-                                                ly = s_last_y;
-                                        } else {
-                                                lx = lx2;
-                                                ly = ly2;
-                                        }
-                                } else {
-                                        lx = s_last_x;
-                                        ly = s_last_y;
-                                }
-                        }
                 } else {
-                        touch_raw_to_lcd(raw_x, raw_y, &lx, &ly);
-                }
+                        int raw_dx = sx - last_raw_x;
+                        int raw_dy = sy - last_raw_y;
+                        last_raw_x = sx;
+                        last_raw_y = sy;
 
-                if (lx <= TOUCH_EDGE_SNAP_X) {
-                        lx = 0;
-                } else if (lx >= (LCD_WIDTH - 1 - TOUCH_EDGE_SNAP_X)) {
-                        lx = LCD_WIDTH - 1;
-                }
-                if (ly <= TOUCH_EDGE_SNAP_Y) {
-                        ly = 0;
-                } else if (ly >= (LCD_HEIGHT - 1 - TOUCH_EDGE_SNAP_Y)) {
-                        ly = LCD_HEIGHT - 1;
-                }
+                        /* Ignore sporadic outlier samples that cause large jumps. */
+                        if (point.track_id == last_track_id &&
+                            (abs(raw_dx) > 120 || abs(raw_dy) > 120)) {
+                                *dx = 0;
+                                *dy = 0;
+                                *button = 1;
+                                return true;
+                        }
+                        last_track_id = point.track_id;
 
-                s_hist_x[s_hist_head] = lx;
-                s_hist_y[s_hist_head] = ly;
-                s_hist_head = (s_hist_head + 1) % 3;
-                if (s_hist_count < 3) {
-                        s_hist_count++;
-                }
-                if (s_hist_count == 3) {
-                        lx = median3(s_hist_x[0], s_hist_x[1], s_hist_x[2]);
-                        ly = median3(s_hist_y[0], s_hist_y[1], s_hist_y[2]);
-                }
+                        /* Exponential moving average (alpha = 0.5) on mapped coordinates. */
+                        int target_x_q8 = sx << 8;
+                        int target_y_q8 = sy << 8;
+                        filt_x_q8 += (target_x_q8 - filt_x_q8) >> 1;
+                        filt_y_q8 += (target_y_q8 - filt_y_q8) >> 1;
 
-                int ndx = 0;
-                int ndy = 0;
-                if (s_last_valid) {
-                        ndx = lx - s_last_x;
-                        ndy = ly - s_last_y;
-                        /* Small deadzone to reduce pointer jitter when held still. */
-                        if (abs(ndx) <= 1) ndx = 0;
-                        if (abs(ndy) <= 1) ndy = 0;
+                        int out_x = filt_x_q8 >> 8;
+                        int out_y = filt_y_q8 >> 8;
+                        int ddx = out_x - last_out_x;
+                        int ddy = out_y - last_out_y;
+                        last_out_x = out_x;
+                        last_out_y = out_y;
+
+                        /* Jitter deadzone. */
+                        if (abs(ddx) <= 1) ddx = 0;
+                        if (abs(ddy) <= 1) ddy = 0;
+
+                        /* Cap per-sample delta to suppress noisy bursts. */
+                        if (ddx > 20) ddx = 20;
+                        if (ddx < -20) ddx = -20;
+                        if (ddy > 20) ddy = 20;
+                        if (ddy < -20) ddy = -20;
+
+                        *dx = ddx;
+                        *dy = ddy;
                 }
-                s_last_x = lx;
-                s_last_y = ly;
-                s_last_valid = true;
-                *dx = ndx;
-                *dy = ndy;
+                last_pressed = true;
                 *button = 1;
-                s_last_button = 1;
-                return (ndx != 0 || ndy != 0 || was_pressed == 0);
-        }
-
-        s_valid_streak = 0;
-        if (s_invalid_streak < 3) {
-                s_invalid_streak++;
-        }
-        if (s_invalid_streak < 2) {
-                return false;
-        }
-
-        if (s_last_button) {
-                s_last_valid = false;
-                s_hist_count = 0;
-                s_hist_head = 0;
-                s_last_button = 0;
+                return true;
+        } else if (last_pressed) {
                 *dx = 0;
                 *dy = 0;
                 *button = 0;
+                last_pressed = false;
+                last_track_id = 0xff;
                 return true;
         }
 

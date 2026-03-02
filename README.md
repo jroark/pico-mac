@@ -13,7 +13,7 @@ This tree currently has:
 ## Project Status
 
 - Primary target: **RP2040/Pico**
-- ESP32-S3: **experimental** (LCD + touch + SD image path available)
+- ESP32-S3: **experimental** (Waveshare ESP32-S3-Touch-LCD-2.8B path available)
 
 ## Quick Start (RP2040)
 
@@ -205,7 +205,8 @@ Port work has started under:
 
 Current status:
 - ESP-IDF app path is available under `ports/esp32s3/`
-- Shared SPI LCD + touch + SD stack is implemented for Waveshare 2.8 wiring
+- Waveshare ESP32-S3-Touch-LCD-2.8B RGB LCD path is implemented (`480x640` panel)
+- GT911 touch and SD disk-image loading are integrated on the 2.8B board
 - SD disk images load from SD at boot (RAM-first, file-backed fallback on low heap)
 - USB monitor logging is available via `idf.py monitor`
 - RP2040 remains the primary/most stable target
@@ -222,7 +223,7 @@ For details, see:
 - Cursor jitter on shared SPI:
   - reduce SD traffic and verify touch IRQ pin wiring
 - ESP32 USB debug logs:
-  - `cd ports/esp32s3 && source ~/src/esp/esp-idf/export.sh && idf.py -p /dev/cu.usbmodem1101 monitor`
+  - `cd ports/esp32s3 && source ~/src/esp/esp-idf/export.sh && idf.py -p /dev/cu.usbmodem2101 monitor`
 
 ## Acknowledgements
 

@@ -1,49 +1,79 @@
-# ESP32-S3 Port (Experimental)
+# ESP32-S3 Port (Waveshare 2.8B)
 
-This directory contains the ESP-IDF firmware path for ESP32-S3 boards.
+This ESP-IDF port targets the **Waveshare ESP32-S3-Touch-LCD-2.8B** board.
 
-## Current scope
+## Status
 
-- uMac core boots and runs
-- ILI9341 SPI LCD output
-- XPT2046 touch input
-- SD card mount over SPI (`SDSPI`)
-- SD disk image load from SD at boot (RAM-first, file-backed fallback on low heap)
+- uMac boots and runs
+- RGB LCD path works (ST7701, 480x640 panel)
+- GT911 touch init/poll works over I2C
+- SD mounts over SPI and disk image loads from `/sdcard`
+- SD image loading is RAM-first (PSRAM) with file-backed fallback on low heap
 
-RP2040 remains the primary target; this port is still experimental.
+RP2040 remains the primary stable target for this project.
 
-## Board/pin mapping (YD-ESP32-23)
+## Display Model
 
-Defined in `main/pinmap.h`:
+- Physical panel: `480x640` (portrait)
+- Emulator framebuffer in this port: `640x480` (landscape)
+- Blit path rotates 90 degrees into the portrait panel
 
-- Shared SPI bus:
-  - `SCK=GPIO12`
-  - `MOSI=GPIO11`
-  - `MISO=GPIO13`
-- Chip selects:
-  - `LCD_CS=GPIO10`
-  - `TOUCH_CS=GPIO9`
-  - `SD_CS=GPIO14` (fallback probe also tries GPIO15)
-- LCD control:
-  - `LCD_DC=GPIO8`
-  - `LCD_RST=GPIO7`
-  - `LCD_BL=GPIO6`
-- Touch IRQ:
-  - `TOUCH_IRQ=GPIO5`
+## Board Mapping
 
-## Build / flash / monitor
+Defined in `main/pinmap_ws28b.h`.
+
+### I2C
+
+- `SDA=GPIO15`
+- `SCL=GPIO7`
+
+### RGB LCD Signals
+
+- `PCLK=GPIO41`
+- `VSYNC=GPIO39`
+- `HSYNC=GPIO38`
+- `DE=GPIO40`
+
+RGB565 bus wiring (host D0..D15):
+
+- `D0..D4`: `GPIO5,45,48,47,21`
+- `D5..D10`: `GPIO14,13,12,11,10,9`
+- `D11..D15`: `GPIO46,3,8,18,17`
+
+### LCD Init SPI (3-wire bit-bang)
+
+- `SCL=GPIO2`
+- `SDA=GPIO1`
+
+### Touch / SD
+
+- Touch IRQ: `GPIO16`
+- SD SPI: `SCK=GPIO2`, `MOSI=GPIO1`, `MISO=GPIO42`
+
+### TCA9554 Expander (P0..P7)
+
+- `P0`: LCD reset
+- `P1`: touch reset
+- `P2`: LCD CS (init interface)
+- `P3`: SD CS
+
+## Build / Flash / Monitor
 
 ```bash
 cd ports/esp32s3
 source ~/src/esp/esp-idf/export.sh
 idf.py build
-idf.py -p /dev/cu.usbmodem1101 flash
-idf.py -p /dev/cu.usbmodem1101 monitor
+idf.py -p /dev/cu.usbmodem2101 flash
+idf.py -p /dev/cu.usbmodem2101 monitor
 ```
 
-## SD image behavior
+Exit monitor: `Ctrl+]`
 
-- SD root is scanned for common image names and extensions:
-  - `umac0.img`, `UMAC0.IMG`, `disc.img`, `disc.dsk`, `system.img`, `system.dsk`
-  - first `*.img|*.dsk|*.dc42` found is used
-- If open/mount fails, firmware falls back to built-in `incbin` disk image.
+## SD Disk Image
+
+At boot, firmware scans `/sdcard` for:
+
+- `umac0.img`, `UMAC0.IMG`, `disc.img`, `disc.dsk`, `system.img`, `system.dsk`
+- then first matching `*.img|*.dsk|*.dc42`
+
+If SD mount/open fails, it falls back to built-in `incbin` disk image.
